@@ -113,12 +113,7 @@ func (s *StateMachineCallMethod) stepRegisterIncoming(ctx smachine.ExecutionCont
 				externalError = errors.Errorf("unexpected request type: %T", s.requestInfo.Request)
 			}
 		}
-	}).DelayedStart().Sleep().ThenJump(func(ctx smachine.ExecutionContext) smachine.StateUpdate {
-		if externalError != nil {
-			return ctx.Error(externalError)
-		}
-		return ctx.Jump(s.stepSendRequestID)
-	})
+	}).DelayedStart().Sleep().ThenJump(s.stepSendRequestID)
 }
 
 func (s *StateMachineCallMethod) stepSendRequestID(ctx smachine.ExecutionContext) smachine.StateUpdate {

@@ -43,7 +43,7 @@ type SharedRequestState struct {
 type ExecuteIncomingCommon struct {
 	SharedRequestState
 
-	objectCatalog  *sm_object.LocalObjectCatalog
+	objectCatalog  sm_object.LocalObjectCatalog
 	pulseSlot      *conveyor.PulseSlot
 	ArtifactClient *s_artifact.ArtifactClientServiceAdapter
 	Sender         *s_sender.SenderServiceAdapter
@@ -69,7 +69,6 @@ func (s *ExecuteIncomingCommon) InjectDependencies(sm smachine.StateMachine, slo
 	injector.MustInject(&s.ContractRunner)
 
 	injector.MustInject(&s.pulseSlot)
-	injector.MustInject(&s.objectCatalog)
 }
 
 func (s *ExecuteIncomingCommon) useSharedObjectInfo(ctx smachine.ExecutionContext, cb func(state *sm_object.SharedObjectState)) smachine.StateUpdate {

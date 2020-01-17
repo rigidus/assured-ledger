@@ -303,19 +303,9 @@ func (b *Bus) sendTarget(
 func (b *Bus) Reply(ctx context.Context, origin payload.Meta, reply *message.Message) {
 	logger := inslogger.FromContext(ctx)
 
-	ctx, span := instracer.StartSpan(ctx, "Bus.Reply")
-	span.SetTag("type", "bus").SetTag("sender", origin.Sender.String())
-	defer span.Finish()
-
-	msgType := messagePayloadTypeName(reply)
-	mctx := insmetrics.InsertTag(ctx, tagMessageType, msgType)
-	mctx = insmetrics.InsertTag(mctx, tagMessageRole, "reply")
-	stats.Record(mctx, statSentBytes.M(int64(len(reply.Payload))))
-
 	originHash := payload.MessageHash{}
 	err := originHash.Unmarshal(origin.ID)
 	if err != nil {
-		instracer.AddError(span, err)
 		logger.Error(errors.Wrap(err, "failed to unmarshal hash"))
 		return
 	}
@@ -332,7 +322,6 @@ func (b *Bus) Reply(ctx context.Context, origin payload.Meta, reply *message.Mes
 
 	wrapped, reply, err := b.wrapMeta(ctx, reply, origin.Sender, originHash, pn)
 	if err != nil {
-		instracer.AddError(span, err)
 		logger.Error("can't wrap meta message ", err.Error())
 		return
 	}
@@ -340,7 +329,6 @@ func (b *Bus) Reply(ctx context.Context, origin payload.Meta, reply *message.Mes
 	replyHash := payload.MessageHash{}
 	err = replyHash.Unmarshal(wrapped.ID)
 	if err != nil {
-		instracer.AddError(span, err)
 		logger.Error(errors.Wrap(err, "failed to unmarshal hash"))
 		return
 	}
@@ -354,7 +342,6 @@ func (b *Bus) Reply(ctx context.Context, origin payload.Meta, reply *message.Mes
 	if err == nil {
 		reply.Metadata.Set(meta.SpanData, string(sp))
 	} else {
-		instracer.AddError(span, err)
 		logger.Error(err)
 	}
 
@@ -363,7 +350,6 @@ func (b *Bus) Reply(ctx context.Context, origin payload.Meta, reply *message.Mes
 	logger.Debugf("sending reply")
 	err = b.pub.Publish(TopicOutgoing, reply)
 	if err != nil {
-		instracer.AddError(span, err)
 		logger.Errorf("can't publish message to %s topic: %s", TopicOutgoing, err.Error())
 	}
 }
