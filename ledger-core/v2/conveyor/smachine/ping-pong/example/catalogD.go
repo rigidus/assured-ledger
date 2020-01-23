@@ -32,6 +32,7 @@ type CatalogD = *catalogD
 type GameSharedState struct {
 	key         longbits.ByteString
 	BallOwner   *StateMachine3
+	cnt			int
 }
 
 func (p *GameSharedState) GetKey() longbits.ByteString {
@@ -61,7 +62,7 @@ func (p *catalogD) Get(ctx smachine.ExecutionContext, key longbits.ByteString) G
 
 func (p *catalogD) TryGet(ctx smachine.ExecutionContext, key longbits.ByteString) (GameSharedStateAccessor, bool) {
 
-	if v := ctx.GetPublishedLink(key); v.IsAssignableTo((*CustomSharedState)(nil)) {
+	if v := ctx.GetPublishedLink(key); v.IsAssignableTo((*GameSharedState)(nil)) {
 		return GameSharedStateAccessor{v}, true
 	}
 	return GameSharedStateAccessor{}, false
@@ -73,10 +74,10 @@ func (p *catalogD) GetOrCreate(ctx smachine.ExecutionContext, key longbits.ByteS
 	}
 
 	ctx.InitChild(func(ctx smachine.ConstructionContext) smachine.StateMachine {
-		return &catalogEntryDSM{sharedState: CustomSharedState{
+		return &catalogEntryDSM{sharedState: GameSharedState{
 			key: key,
 			//Mutex: smachine.NewExclusiveWithFlags("", 0), //smachine.QueueAllowsPriority),
-			Mutex: smachine.NewSemaphoreWithFlags(2, "", smachine.QueueAllowsPriority).SyncLink(),
+			//Mutex: smachine.NewSemaphoreWithFlags(2, "", smachine.QueueAllowsPriority).SyncLink(),
 		}}
 	})
 
@@ -85,7 +86,7 @@ func (p *catalogD) GetOrCreate(ctx smachine.ExecutionContext, key longbits.ByteS
 
 type catalogEntryDSM struct {
 	smachine.StateMachineDeclTemplate
-	sharedState CustomSharedState
+	sharedState GameSharedState
 }
 
 

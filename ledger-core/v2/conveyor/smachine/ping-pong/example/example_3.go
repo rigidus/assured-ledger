@@ -33,7 +33,7 @@ type StateMachine3 struct {
 
 	mutex   smachine.SyncLink
 	testKey longbits.ByteString
-	waitKey longbits.ByteString
+	waitKey string //longbits.ByteString
 	result  string
 	count   int
 }
@@ -73,20 +73,25 @@ func (s *StateMachine3) Init(ctx smachine.InitializationContext) smachine.StateU
 }
 
 func (s *StateMachine3) Start(ctx smachine.ExecutionContext) smachine.StateUpdate {
+	// Looking for make-pair shared object
 	if v, ok := s.catalogC.TryGet(ctx, s.testKey) ; ok {
+		// Make-pair found
 		myCustomSharedStateAccessor := v
 		mySharedDataAccessor := myCustomSharedStateAccessor.Prepare(func(state *CustomSharedState) {
-			state.SecondPlayer = s
-			key := fmt.Sprintf("%s.%s", state.FirstPlayer, state.SecondPlayer)
-			s.waitKey = longbits.ByteString(key)
-			fmt.Printf("Start:%p (Shared), Second = %p, Pair=%p \n", s, s, state.FirstPlayer)
+			state.SecondPlayer = s // First Player is already there, I will be Second Player
+			fmt.Printf("Start:%p (Shared), set Second = %p, Pair=%p \n", s, s, state.FirstPlayer)
+			// Key for Game Object
+			key := fmt.Sprintf("%p.%p", state.FirstPlayer, state.SecondPlayer)
+			fmt.Printf("key=%s \n", key)
+			s.waitKey = key //longbits.ByteString(key)
 		})
 		mySharedAccessReport := mySharedDataAccessor.TryUse(ctx)
 		return smachine.RepeatOrJumpElse(ctx, mySharedAccessReport, s.WaitForGame, s.Wrong)
 	} else {
+		// Make-pair not found
 		myCustomSharedStateAccessor := s.catalogC.GetOrCreate(ctx, s.testKey)
 		mySharedDataAccessor := myCustomSharedStateAccessor.Prepare(func(state *CustomSharedState) {
-			state.FirstPlayer = s
+			state.FirstPlayer = s // I will be First Player
 			fmt.Printf("Start:%p (no Shared), set First = %p \n", s, s)
 		})
 		mySharedAccessReport := mySharedDataAccessor.TryUse(ctx)
@@ -95,13 +100,15 @@ func (s *StateMachine3) Start(ctx smachine.ExecutionContext) smachine.StateUpdat
 }
 
 func (s *StateMachine3) WaitForSecond(ctx smachine.ExecutionContext) smachine.StateUpdate {
+	// Waiting for Second Player on Make-pair object
 	if v, ok := s.catalogC.TryGet(ctx, s.testKey) ; ok {
 		myCustomSharedStateAccessor := v
-		switcher := false
+		switcher := false // Default: No Second player
 		mySharedDataAccessor := myCustomSharedStateAccessor.Prepare(func(state *CustomSharedState) {
 			if nil != state.SecondPlayer {
-				switcher = true
-				fmt.Printf("Wait for Second:%p, Second = %p \n", s, state.SecondPlayer)
+				switcher = true // Second player is here!
+				s.waitKey = fmt.Sprintf("%p.%p", state.FirstPlayer, state.SecondPlayer)
+				fmt.Printf("Wait for Second:%p, Second found = %p, Go! \n", s, state.SecondPlayer)
 			} else {
 				fmt.Printf("Wait for Second:%p, Waiting = %p \n", s, state.SecondPlayer)
 			}
@@ -109,15 +116,13 @@ func (s *StateMachine3) WaitForSecond(ctx smachine.ExecutionContext) smachine.St
 		mySharedAccessReport := mySharedDataAccessor.TryUse(ctx)
 		if switcher {
 			// TODO: making new SharedObject for Game and BallOwner initialization
-			myGameSharedStateAccessor := s.catalogD.GetOrCreate(ctx, s.waitKey)
+			myGameSharedStateAccessor := s.catalogD.GetOrCreate(ctx, longbits.ByteString(s.waitKey))
 			mySharedDataAccessor := myGameSharedStateAccessor.Prepare(func(state *GameSharedState) {
-				state.BallOwner = s
-				fmt.Printf("Start:%p (no Shared), set First = %p \n", s, s)
+				state.BallOwner = s // I will be owner
+				state.cnt = 0
+				fmt.Printf("Lets Game:%d, Owner: \n", state.cnt, s)
 			})
 			mySharedAccessReport := mySharedDataAccessor.TryUse(ctx)
-
-
-
 			// Go to Game
 			return smachine.RepeatOrJumpElse(ctx, mySharedAccessReport, s.Game, s.Wrong)
 		} else {
@@ -131,29 +136,61 @@ func (s *StateMachine3) WaitForSecond(ctx smachine.ExecutionContext) smachine.St
 }
 
 func (s *StateMachine3) WaitForGame(ctx smachine.ExecutionContext) smachine.StateUpdate {
-	fmt.Printf("WaitForGame: %p \n", s)
-	if v, ok := s.catalogC.TryGet(ctx, s.waitKey) ; ok {
-		fmt.Printf("%v \n", v)
+	// Waiting for Game Object
+	// fmt.Printf("WaitForGame: %s \n", s.waitKey)
+	if v, ok := s.catalogC.TryGet(ctx, longbits.ByteString(s.waitKey)) ; ok {
+		fmt.Printf("WaitForGame: Object detected %v \n", v)
 		return ctx.Jump(s.Game)
 	} else {
 		// repeat
-		return ctx.Sleep().ThenRepeat()
-		// return ctx.Jump(s.WaitForGame)
+		// return ctx.Sleep().ThenRepeat() // - Does not works, why? [TODO]
+		time.After(2*time.Second) // ...same
+		return ctx.Jump(s.WaitForGame)
 	}
 }
 
 func (s *StateMachine3) Game(ctx smachine.ExecutionContext) smachine.StateUpdate {
 	fmt.Printf("Game %p \n", s)
-	return ctx.Jump(s.GameOver)
+	if v, ok := s.catalogD.TryGet(ctx, longbits.ByteString(s.waitKey)) ; ok {
+		fmt.Printf("HERE 0 : %s", v)
+		endgame := false
+		myGameSharedStateAccessor := v
+		mySharedDataAccessor := myGameSharedStateAccessor.Prepare(func(state *GameSharedState) {
+			fmt.Printf("Game: %p, HERE 1 \n", s)
+			if s != state.BallOwner {
+				fmt.Printf("Game: %p, Change Owner \n", s)
+				state.BallOwner = s
+			}
+			state.cnt += 1
+			if state.cnt > 2 {
+				endgame = true
+				fmt.Printf("EndGame:%d, \n", s)
+			}
+		})
+		mySharedAccessReport := mySharedDataAccessor.TryUse(ctx)
+		fmt.Printf("Game: %p, HERE 2 %s \n", s, mySharedAccessReport)
+		if endgame {
+			// Go to GameOver
+			return smachine.RepeatOrJumpElse(ctx, mySharedAccessReport, s.GameOver, s.Wrong)
+		} else {
+			// repeat
+			return smachine.RepeatOrJumpElse(ctx, mySharedAccessReport, s.Game, s.Wrong)
+		}
+	} else {
+		// Impossible (let it be for dbg)
+		return ctx.Jump(s.Wrong)
+	}
 }
 
 func (s *StateMachine3) GameOver(ctx smachine.ExecutionContext) smachine.StateUpdate {
 	fmt.Printf("GameOver %p \n", s)
-	return ctx.Jump(s.GameOver)
+	return ctx.Stop()
+	//return ctx.Jump(s.GameOver)
 	//return ctx.Stop()
 }
 
 func (s *StateMachine3) Wrong(ctx smachine.ExecutionContext) smachine.StateUpdate {
+	fmt.Printf("WRONG!!! %p \n", s)
 	return ctx.WaitAnyUntil(time.Now().Add(time.Second)).ThenJump(s.Wrong)
 	//return ctx.Stop()
 }
