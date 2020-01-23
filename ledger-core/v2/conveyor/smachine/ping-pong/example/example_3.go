@@ -76,25 +76,21 @@ func (s *StateMachine3) Start(ctx smachine.ExecutionContext) smachine.StateUpdat
 	// Looking for make-pair shared object
 	if v, ok := s.catalogC.TryGet(ctx, s.testKey) ; ok {
 		// Make-pair found
-		myCustomSharedStateAccessor := v
-		mySharedDataAccessor := myCustomSharedStateAccessor.Prepare(func(state *CustomSharedState) {
+		mySharedAccessReport := v.Prepare(func(state *CustomSharedState) {
 			state.SecondPlayer = s // First Player is already there, I will be Second Player
 			fmt.Printf("Start:%p (Shared), set Second = %p, Pair=%p \n", s, s, state.FirstPlayer)
 			// Key for Game Object
 			key := fmt.Sprintf("%p.%p", state.FirstPlayer, state.SecondPlayer)
 			fmt.Printf("key=%s \n", key)
 			s.waitKey = key //longbits.ByteString(key)
-		})
-		mySharedAccessReport := mySharedDataAccessor.TryUse(ctx)
+		}).TryUse(ctx)
 		return smachine.RepeatOrJumpElse(ctx, mySharedAccessReport, s.WaitForGame, s.Wrong)
 	} else {
 		// Make-pair not found
-		myCustomSharedStateAccessor := s.catalogC.GetOrCreate(ctx, s.testKey)
-		mySharedDataAccessor := myCustomSharedStateAccessor.Prepare(func(state *CustomSharedState) {
+		mySharedAccessReport := s.catalogC.GetOrCreate(ctx, s.testKey).Prepare(func(state *CustomSharedState) {
 			state.FirstPlayer = s // I will be First Player
 			fmt.Printf("Start:%p (no Shared), set First = %p \n", s, s)
-		})
-		mySharedAccessReport := mySharedDataAccessor.TryUse(ctx)
+		}).TryUse(ctx)
 		return smachine.RepeatOrJumpElse(ctx, mySharedAccessReport, s.WaitForSecond, s.Wrong)
 	}
 }
@@ -102,9 +98,8 @@ func (s *StateMachine3) Start(ctx smachine.ExecutionContext) smachine.StateUpdat
 func (s *StateMachine3) WaitForSecond(ctx smachine.ExecutionContext) smachine.StateUpdate {
 	// Waiting for Second Player on Make-pair object
 	if v, ok := s.catalogC.TryGet(ctx, s.testKey) ; ok {
-		myCustomSharedStateAccessor := v
 		switcher := false // Default: No Second player
-		mySharedDataAccessor := myCustomSharedStateAccessor.Prepare(func(state *CustomSharedState) {
+		mySharedAccessReport := v.Prepare(func(state *CustomSharedState) {
 			if nil != state.SecondPlayer {
 				switcher = true // Second player is here!
 				s.waitKey = fmt.Sprintf("%p.%p", state.FirstPlayer, state.SecondPlayer)
@@ -112,17 +107,15 @@ func (s *StateMachine3) WaitForSecond(ctx smachine.ExecutionContext) smachine.St
 			} else {
 				fmt.Printf("Wait for Second:%p, Waiting = %p \n", s, state.SecondPlayer)
 			}
-		})
-		mySharedAccessReport := mySharedDataAccessor.TryUse(ctx)
+		}).TryUse(ctx)
 		if switcher {
-			// TODO: making new SharedObject for Game and BallOwner initialization
+			// making new SharedObject for Game and BallOwner initialization
 			myGameSharedStateAccessor := s.catalogD.GetOrCreate(ctx, longbits.ByteString(s.waitKey))
-			mySharedDataAccessor := myGameSharedStateAccessor.Prepare(func(state *GameSharedState) {
+			mySharedAccessReport := myGameSharedStateAccessor.Prepare(func(state *GameSharedState) {
 				state.BallOwner = s // I will be owner
 				state.cnt = 0
 				fmt.Printf("Lets Game:%d, Owner: \n", state.cnt, s)
-			})
-			mySharedAccessReport := mySharedDataAccessor.TryUse(ctx)
+			}).TryUse(ctx)
 			// Go to Game
 			return smachine.RepeatOrJumpElse(ctx, mySharedAccessReport, s.Game, s.Wrong)
 		} else {
@@ -154,8 +147,7 @@ func (s *StateMachine3) Game(ctx smachine.ExecutionContext) smachine.StateUpdate
 	if v, ok := s.catalogD.TryGet(ctx, longbits.ByteString(s.waitKey)) ; ok {
 		fmt.Printf("HERE 0 : %s", v)
 		endgame := false
-		myGameSharedStateAccessor := v
-		mySharedDataAccessor := myGameSharedStateAccessor.Prepare(func(state *GameSharedState) {
+		mySharedAccessReport := v.Prepare(func(state *GameSharedState) {
 			fmt.Printf("Game: %p, HERE 1 \n", s)
 			if s != state.BallOwner {
 				fmt.Printf("Game: %p, Change Owner \n", s)
@@ -166,8 +158,7 @@ func (s *StateMachine3) Game(ctx smachine.ExecutionContext) smachine.StateUpdate
 				endgame = true
 				fmt.Printf("EndGame:%d, \n", s)
 			}
-		})
-		mySharedAccessReport := mySharedDataAccessor.TryUse(ctx)
+		}).TryUse(ctx)
 		fmt.Printf("Game: %p, HERE 2 %s \n", s, mySharedAccessReport)
 		if endgame {
 			// Go to GameOver
