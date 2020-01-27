@@ -33,8 +33,8 @@ type CustomSharedState struct {
 	key     longbits.ByteString
 	Mutex   smachine.SyncLink
 	Text    string
-	FirstPlayer *StateMachine3
-	SecondPlayer *StateMachine3
+	FirstPlayer string //Fix it
+	SecondPlayer string
 
 	Counter int
 }
@@ -49,6 +49,24 @@ type CustomSharedStateAccessor struct {
 
 func (v CustomSharedStateAccessor) Prepare(fn func(*CustomSharedState)) smachine.SharedDataAccessor {
 	return v.link.PrepareAccess(func(data interface{}) bool {
+		fn(data.(*CustomSharedState))
+		return false
+	})
+}
+
+func (v CustomSharedStateAccessor) PrepareWithFirstPlayer(fn func(*CustomSharedState),
+	FirstPlayer *StateMachine3) smachine.SharedDataAccessor {
+	return v.link.PrepareAccess(func(data interface{}) bool {
+		data.(*CustomSharedState).FirstPlayer = fmt.Sprintf("%p", FirstPlayer)
+		fn(data.(*CustomSharedState))
+		return false
+	})
+}
+
+func (v CustomSharedStateAccessor) PrepareWithSecondPlayer(fn func(*CustomSharedState),
+	SecondPlayer *StateMachine3) smachine.SharedDataAccessor {
+	return v.link.PrepareAccess(func(data interface{}) bool {
+		data.(*CustomSharedState).SecondPlayer = fmt.Sprintf("%p", SecondPlayer)
 		fn(data.(*CustomSharedState))
 		return false
 	})
@@ -82,6 +100,7 @@ func (p *catalogC) GetOrCreate(ctx smachine.ExecutionContext, key longbits.ByteS
 			key: key,
 			//Mutex: smachine.NewExclusiveWithFlags("", 0), //smachine.QueueAllowsPriority),
 			Mutex: smachine.NewSemaphoreWithFlags(2, "", smachine.QueueAllowsPriority).SyncLink(),
+
 		}}
 	})
 

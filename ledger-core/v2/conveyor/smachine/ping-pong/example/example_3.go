@@ -76,22 +76,22 @@ func (s *StateMachine3) Start(ctx smachine.ExecutionContext) smachine.StateUpdat
 	// Looking for make-pair shared object
 	if v, ok := s.catalogC.TryGet(ctx, s.testKey) ; ok {
 		// Make-pair found
-		mySharedAccessReport := v.Prepare(func(state *CustomSharedState) {
-			state.SecondPlayer = s // First Player is already there, I will be Second Player
+		mySharedAccessReport := v.PrepareWithSecondPlayer(func(state *CustomSharedState) {
+			// First Player is already there, I will be Second Player
 			fmt.Printf("Start:%p (Shared), set Second = %p, Pair=%p \n", s, s, state.FirstPlayer)
 			// Key for Game Object
 			key := fmt.Sprintf("%p.%p", state.FirstPlayer, state.SecondPlayer)
 			fmt.Printf("key=%s \n", key)
 			s.waitKey = key //longbits.ByteString(key)
-		}).TryUse(ctx)
+		},s ).TryUse(ctx)
 		return smachine.RepeatOrJumpElse(ctx, mySharedAccessReport, s.WaitForGame, s.Wrong)
 	} else {
 		// Make-pair not found
-		mySharedAccessReport := s.catalogC.GetOrCreate(ctx, s.testKey).Prepare(func(state *CustomSharedState) {
-			state.FirstPlayer = s // I will be First Player
+		report := s.catalogC.GetOrCreate(ctx, s.testKey).PrepareWithFirstPlayer(func(state *CustomSharedState) {
+			//state.FirstPlayer = s // I will be First Player
 			fmt.Printf("Start:%p (no Shared), set First = %p \n", s, s)
-		}).TryUse(ctx)
-		return smachine.RepeatOrJumpElse(ctx, mySharedAccessReport, s.WaitForSecond, s.Wrong)
+		}, s).TryUse(ctx)
+		return smachine.RepeatOrJumpElse(ctx, report, s.WaitForSecond, s.Wrong)
 	}
 }
 
@@ -100,7 +100,7 @@ func (s *StateMachine3) WaitForSecond(ctx smachine.ExecutionContext) smachine.St
 	if v, ok := s.catalogC.TryGet(ctx, s.testKey) ; ok {
 		switcher := false // Default: No Second player
 		mySharedAccessReport := v.Prepare(func(state *CustomSharedState) {
-			if nil != state.SecondPlayer {
+			if "" != state.SecondPlayer {
 				switcher = true // Second player is here!
 				s.waitKey = fmt.Sprintf("%p.%p", state.FirstPlayer, state.SecondPlayer)
 				fmt.Printf("Wait for Second:%p, Second found = %p, Go! \n", s, state.SecondPlayer)
