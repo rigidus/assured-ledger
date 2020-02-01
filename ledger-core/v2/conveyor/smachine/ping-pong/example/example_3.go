@@ -124,7 +124,7 @@ func (s *StateMachine3) WaitForSecond(ctx smachine.ExecutionContext) smachine.St
 func (s *StateMachine3) WaitForGame(ctx smachine.ExecutionContext) smachine.StateUpdate {
 	// Waiting for Game Object
 	// fmt.Printf("WaitForGame: %s \n", s.waitKey)
-	if v, ok := s.catalogC.TryGet(ctx, longbits.ByteString(s.waitKey)) ; ok {
+	if _, ok := s.catalogC.TryGet(ctx, longbits.ByteString(s.waitKey)) ; ok {
 		return ctx.Jump(s.Game)
 	} else {
 		// repeat
@@ -168,6 +168,6 @@ func (s *StateMachine3) GameOver(ctx smachine.ExecutionContext) smachine.StateUp
 
 func (s *StateMachine3) Wrong(ctx smachine.ExecutionContext) smachine.StateUpdate {
 	fmt.Printf("ErrState: WRONG!!! %p \n", s)
-	return ctx.WaitAnyUntil(time.Now().Add(time.Second)).ThenJump(s.Wrong)
-	//return ctx.Stop()
+	//return ctx.WaitAnyUntil(time.Now().Add(time.Second)).ThenJump(s.Wrong)
+	return ctx.Stop()
 }
