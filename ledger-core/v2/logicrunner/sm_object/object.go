@@ -17,8 +17,6 @@
 package sm_object
 
 import (
-	"github.com/pkg/errors"
-
 	"github.com/insolar/assured-ledger/ledger-core/v2/conveyor"
 	"github.com/insolar/assured-ledger/ledger-core/v2/conveyor/smachine"
 	"github.com/insolar/assured-ledger/ledger-core/v2/insolar"
@@ -192,41 +190,41 @@ func (sm *SMObject) stepGetPendingsInformation(ctx smachine.ExecutionContext) sm
 	}).DelayedStart().Sleep().ThenJump(sm.stepCheckPreviousExecutor)
 }
 
-// we should check here only if not creation request here
-func (sm *SMObject) stepGetLatestValidatedState(ctx smachine.ExecutionContext) smachine.StateUpdate {
-	ctx.SetDefaultMigration(sm.migrateStop)
-
-	goCtx := ctx.GetContext()
-	objectReference := sm.ObjectReference
-
-	if !sm.oldObject {
-		sm.oldObject = true
-		sm.IsReadyToWork = true
-		return ctx.Jump(sm.stateGotLatestValidatedStatePrototypeAndCode)
-	}
-
-	return sm.artifactClient.PrepareAsync(ctx, func(svc s_artifact.ArtifactClientService) smachine.AsyncResultFunc {
-		var err error
-
-		failCallback := func(ctx smachine.AsyncResultContext) {
-			inslogger.FromContext(goCtx).Error("Failed to obtain objects: ", err)
-			sm.externalError = err
-		}
-
-		inslogger.FromContext(goCtx).Debugf("NewObject fetched %s", objectReference.String())
-		objectDescriptor, err := svc.GetObject(goCtx, objectReference, nil)
-		if err != nil {
-			err = errors.Wrap(err, "Failed to obtain object descriptor")
-			return failCallback
-		}
-
-		return func(ctx smachine.AsyncResultContext) {
-			sm.SetObjectDescriptor(ctx.Log(), objectDescriptor)
-			sm.IsReadyToWork = true
-		}
-	}).DelayedStart().Sleep().ThenJump(sm.stateGotLatestValidatedStatePrototypeAndCode)
-}
-
+//// we should check here only if not creation request here
+//func (sm *SMObject) stepGetLatestValidatedState(ctx smachine.ExecutionContext) smachine.StateUpdate {
+//	ctx.SetDefaultMigration(sm.migrateStop)
+//
+//	goCtx := ctx.GetContext()
+//	objectReference := sm.ObjectReference
+//
+//	if !sm.oldObject {
+//		sm.oldObject = true
+//		sm.IsReadyToWork = true
+//		return ctx.Jump(sm.stateGotLatestValidatedStatePrototypeAndCode)
+//	}
+//
+//	return sm.artifactClient.PrepareAsync(ctx, func(svc s_artifact.ArtifactClientService) smachine.AsyncResultFunc {
+//		var err error
+//
+//		failCallback := func(ctx smachine.AsyncResultContext) {
+//			inslogger.FromContext(goCtx).Error("Failed to obtain objects: ", err)
+//			sm.externalError = err
+//		}
+//
+//		inslogger.FromContext(goCtx).Debugf("NewObject fetched %s", objectReference.String())
+//		objectDescriptor, err := svc.GetObject(goCtx, objectReference, nil)
+//		if err != nil {
+//			err = errors.Wrap(err, "Failed to obtain object descriptor")
+//			return failCallback
+//		}
+//
+//		return func(ctx smachine.AsyncResultContext) {
+//			sm.SetObjectDescriptor(ctx.Log(), objectDescriptor)
+//			sm.IsReadyToWork = true
+//		}
+//	}).DelayedStart().Sleep().ThenJump(sm.stateGotLatestValidatedStatePrototypeAndCode)
+//}
+//
 func (sm *SMObject) stateGotLatestValidatedStatePrototypeAndCode(ctx smachine.ExecutionContext) smachine.StateUpdate {
 	if sm.externalError != nil {
 		ctx.Error(sm.externalError)
@@ -246,7 +244,7 @@ func (sm *SMObject) waitForMigration(ctx smachine.ExecutionContext) smachine.Sta
 	return ctx.Sleep().ThenRepeat()
 }
 
-// //////////////////////////////////////
+//////////////////////////////////////
 
 func (sm *SMObject) migrateSendStateBeforeExecution(ctx smachine.MigrationContext) smachine.StateUpdate {
 	ctx.SetDefaultMigration(nil)

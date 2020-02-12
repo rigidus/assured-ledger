@@ -31,7 +31,8 @@ import (
 const (
 	TemplateDirectory = "templates"
 
-	filename = "src/github.com/insolar/assured-ledger/ledger-core/v2/conveyor/smachine/ping-pong/example/example_3.go"
+	//filename = "src/github.com/insolar/assured-ledger/ledger-core/v2/conveyor/smachine/ping-pong/example/example_3.go"
+	filename = "src/github.com/insolar/assured-ledger/ledger-core/v2/logicrunner/sm_object/object.go"
 	mainPkg   = "main"
 	errorType = "error"
 	MachineTypeGoPlugin
@@ -74,22 +75,23 @@ func (v Variant) Show() string {
 }
 
 type Ret struct {
-	Lvl  	string
-	Str  	string
-	Type 	int
-	Sel  	Variant
-	Args 	[]Variant
+	Lvl  string		// Level: (or "Top" "Deep")
+	Str  string		// String representation if return code
+	Type int		// Type of return
+	Var  Variant	// Content
+	Args []Variant	// Args (if exists)
 }
 
 type FnState struct {
-	Name 	string
-	Recv    *RecvPair
-	Pars    map[string]string // k:name, v:type
-	Rets    []*Ret
+	Name 	string				// Name of function
+	Recv    *RecvPair			// Receiver
+	Pars    map[string]string 	// Parameters: k:name, v:type
+	Rets    []*Ret				// All returns
 }
 
 // ParsedFile struct with prepared info we extract from source code
 type ParsedFile struct {
+	dbg 		bool
 	filename	string
 	code        []byte
 	fileSet     *token.FileSet
@@ -98,16 +100,15 @@ type ParsedFile struct {
 }
 
 func main() {
-	dbg := true
 	pathname:= fmt.Sprintf("%s/%s", os.Getenv("GOPATH"), filename)
-	pf := ParseFile(pathname)
+	pf := ParseFile(pathname, true)
 	uml := "@startuml"
 	// Debug output
-	if dbg {
+	if pf.dbg {
 		fmt.Printf("\n:: resource filename: %s", pf.filename)
 	}
 	for _, state := range pf.states {
-		if dbg {
+		if pf.dbg {
 			fmt.Printf("\n\nfn: %s", state.Name) // Function name
 			fmt.Printf("\nrecv: %s | %s", state.Recv.Name, state.Recv.Type) // Receiver
 			for parName, parType := range state.Pars { // Parameters
@@ -115,12 +116,14 @@ func main() {
 			}
 		}
 		for _, item := range state.Rets {
-			if dbg {
+			if pf.dbg {
 				fmt.Printf("\n%s: ['%s']", item.Lvl, item.Str)
 			}
+			// dbg
+			//uml += fmt.Sprintf("\n ! %s | %s", item.Type, item.Var.Fun)
 			switch item.Type {
 			case RetTypeCall:
-				switch item.Sel.Fun {
+				switch item.Var.Fun {
 				case "Stop":
 					uml += fmt.Sprintf("\n%s --> [*]", state.Name)
 				case "Jump":
@@ -129,21 +132,37 @@ func main() {
 					} else {
 						uml += fmt.Sprintf("\n%s --> %s", state.Name, item.Args[0].Fun)
 				    }
+				case "ThenJump":
+					if 1 == len(state.Rets) && "Top" == item.Lvl { // One Top Level Jmp -> Init
+						uml += fmt.Sprintf("\n[*] --> %s : %s", item.Args[0].Fun, state.Name)
+					} else {
+						uml += fmt.Sprintf("\n%s --> %s", state.Name, item.Args[0].Fun)
+					}
+				case "JumpExt":
+					if 1 == len(state.Rets) && "Top" == item.Lvl { // One Top Level Jmp -> Init
+						uml += fmt.Sprintf("\n[*] --> %s : %s", item.Args[0].Fun, state.Name)
+					} else {
+						uml += fmt.Sprintf("\n%s --> %s", state.Name, item.Args[0].Fun)
+					}
+				case "ThenRepeat":
+					uml += fmt.Sprintf("\n%s --> %s : ThenRepeat", state.Name, state.Name)
 				case "RepeatOrJumpElse":
 					uml += fmt.Sprintf("\n%s -[#RoyalBlue]-> %s : RepeatOr(Jump)Else", state.Name, item.Args[2].Fun)
 					uml += fmt.Sprintf("\n%s -[#DarkGreen]-> %s : RepeatOrJump(Else)", state.Name, item.Args[3].Fun)
 				default:
-					fmt.Printf("\n(=> (. %s %s)", item.Sel.Obj, item.Sel.Fun)
-					for _, arg := range item.Args {
-						fmt.Printf("\n       %s", arg.Show())
+					if pf.dbg {
+						fmt.Printf("\n(=> (. %s %s)", item.Var.Obj, item.Var.Fun)
+						for _, arg := range item.Args {
+							fmt.Printf("\n       %s", arg.Show())
+						}
+						fmt.Printf(")")
 					}
-					fmt.Printf(")" )
 				}
 			default:
-				fmt.Printf("\nError: Unknown RetType: %d", item.Type)
+				fmt.Printf( "\nError: Unknown RetType: %d", item.Type)
 			}
-			if dbg {
-				fmt.Printf("\n(=> (. %s %s)", item.Sel.Obj, item.Sel.Fun)
+			if pf.dbg {
+				fmt.Printf("\n(-> (. %s %s)", item.Var.Obj, item.Var.Fun)
 				for _, arg := range item.Args {
 					fmt.Printf("\n       %s", arg.Show())
 				}
@@ -157,9 +176,10 @@ func main() {
 
 // ParseFile parses a file as Go source code of a smart contract
 // and returns it as `ParsedFile`
-func ParseFile(fileName string) *ParsedFile {
+func ParseFile(fileName string, dbg...bool) *ParsedFile {
 	pf := &ParsedFile{
 		filename:        fileName,
+		dbg: dbg[0],
 	}
 
 	sourceCode, err := slurpFile(fileName)
@@ -180,7 +200,7 @@ func ParseFile(fileName string) *ParsedFile {
 	ast.Inspect(node, func(n ast.Node) bool {
 		fn, ok := n.(*ast.FuncDecl)
 		if ok {
-			pf.parseMethod(fn)  // TODO: return value
+			pf.parseMethod(fn)
 		}
 		return true
 	})
@@ -189,74 +209,104 @@ func ParseFile(fileName string) *ParsedFile {
 }
 
 func (pf *ParsedFile) parseMethod(fn *ast.FuncDecl) {
-	// I want to analise only method functions
-	for _, fld := range fn.Recv.List {
 
-		// I want analyse only method-functions
-		if 1 != len(fld.Names) { // There is method function
-			continue
+	// I want to analise only method functions (if exists)
+	if nil == fn.Recv {
+		if pf.dbg {
+			fmt.Printf("\n:parseMethod: skip %s - No receiver", fn.Name.Name)
 		}
+	} else {
 
-		// I want analyse only exported methods
-		if !fn.Name.IsExported() {
-			continue
-		}
+		for _, fld := range fn.Recv.List {
 
-		// Receiver
-		recv := &RecvPair{
-			Name : fld.Names[0].Name,
-			Type : fmt.Sprintf("%s", pf.code[fld.Type.Pos()-1:fld.Type.End()-1]),
-		}
-
-		// Parameters
-		pars := make(map[string]string, 0)
-		for _, par := range fn.Type.Params.List {
-			pars[par.Names[0].Name] = fmt.Sprintf("%s", pf.code[par.Type.Pos()-1:par.Type.End()-1])
-		}
-
-		// I want to analyse only methods, who takes context
-		if !isMethodTakesCtx(pars) {
-			continue
-		}
-
-		// I want to analyze methods which have a `smashine.StateUpdate' result type
-		res := fn.Type.Results.List[0].Type
-		resSel, ok := res.(*ast.SelectorExpr)
-		if !ok || "StateUpdate" != resSel.Sel.Name {
-			continue
-		}
-		resXstr := fmt.Sprintf("%s", pf.code[resSel.X.Pos()-1:resSel.X.End()-1])
-		if "smachine" != resXstr {
-			continue
-		}
-
-		// Find all Return Statements in function content
-		var rets = make([]*Ret, 0)
-		for _, smth := range fn.Body.List { // ∀ fn.Body.List ← (or RetStmt (Inspect ...))
-			retStmt, ok := smth.(*ast.ReturnStmt)
-			if ok {
-				// return from top-level statements of function
-				rets = append(rets, collectRets(retStmt, pf.code, "Top")...)
-			} else {
-				ast.Inspect(smth, func(in ast.Node) bool {
-					// Find Return Statements
-					retStmt, ok := in.(*ast.ReturnStmt) // ←
-					if ok {
-						// return from deep-level function statememt
-						rets = append(rets, collectRets(retStmt, pf.code, "Deep")...)
-					} else {
-						//fmt.Printf("\nin: %s", reflect.TypeOf(in))
-					}
-					return true
-				})
+			// I want analyse only method-functions
+			if 1 != len(fld.Names) { // There is method function
+				if pf.dbg { fmt.Printf("\n:parseMethod: skip %s - No method function", fn.Name.Name) }
+				continue
 			}
-		}
 
-		pf.states[fn.Name.Name] = &FnState{
-			Name: fn.Name.Name,
-			Recv: recv,
-			Pars: pars,
-			Rets: rets,
+			//// I want analyse only exported methods
+			//if !fn.Name.IsExported() {
+			//	if pf.dbg {
+			//		fmt.Printf(":parseMethod: skip %s - Non exported \n", fn.Name.Name)
+			//	}
+			//	continue
+			//}
+
+			// Receiver
+			recv := &RecvPair{
+				Name: fld.Names[0].Name,
+				Type: fmt.Sprintf("%s", pf.code[fld.Type.Pos()-1:fld.Type.End()-1]),
+			}
+
+			// Parameters
+			pars := make(map[string]string, 0)
+			for _, par := range fn.Type.Params.List {
+				if nil == par.Names {
+					pars["unnamed-param"] = fmt.Sprintf("%s", pf.code[par.Type.Pos()-1:par.Type.End()-1])
+				} else {
+					pars[par.Names[0].Name] = fmt.Sprintf("%s", pf.code[par.Type.Pos()-1:par.Type.End()-1])
+				}
+			}
+
+			// I want to analyse only methods, who takes context
+			if !isMethodTakesCtx(pars) {
+				if pf.dbg { fmt.Printf("\n:parseMethod: skip %s - Doesn`t take CTX", fn.Name.Name) }
+				continue
+			}
+
+			// I want analyse only methods, which returned values
+			if nil == fn.Type.Results {
+				if pf.dbg {
+					fmt.Printf("\n:parseMethod: skip %s - No return value", fn.Name.Name)
+				}
+				continue
+			}
+
+			// I want to analyze methods which have a `smashine.StateUpdate' result type
+			res := fn.Type.Results.List[0].Type
+			resSel, ok := res.(*ast.SelectorExpr)
+			if !ok || "StateUpdate" != resSel.Sel.Name {
+				if pf.dbg { fmt.Printf("\n:parseMethod: skip %s - No StateUpdate result type", fn.Name.Name) }
+				continue
+			}
+			resXstr := fmt.Sprintf("%s", pf.code[resSel.X.Pos()-1:resSel.X.End()-1])
+			if "smachine" != resXstr {
+				if pf.dbg { fmt.Printf("\n:parseMethod: skip %s - No smachine selector result type", fn.Name.Name) }
+				continue
+			}
+
+			// Show name (debug)
+			fmt.Printf("\n:parseMethod: (name dbg) %s", fn.Name.Name)
+
+			// Find all Return Statements in function content
+			var rets = make([]*Ret, 0)
+			for _, smth := range fn.Body.List { // ∀ fn.Body.List ← (or RetStmt (Inspect ...))
+				retStmt, ok := smth.(*ast.ReturnStmt)
+				if ok {
+					// return from top-level statements of function
+					rets = append(rets, collectRets(retStmt, pf.code, "Top")...)
+				} else {
+					ast.Inspect(smth, func(in ast.Node) bool {
+						// Find Return Statements
+						retStmt, ok := in.(*ast.ReturnStmt) // ←
+						if ok {
+							// return from deep-level function statememt
+							rets = append(rets, collectRets(retStmt, pf.code, "Deep")...)
+						} else {
+							//fmt.Printf("\nin: %s", reflect.TypeOf(in))
+						}
+						return true
+					})
+				}
+			}
+
+			pf.states[fn.Name.Name] = &FnState{
+				Name: fn.Name.Name,
+				Recv: recv,
+				Pars: pars,
+				Rets: rets,
+			}
 		}
 	}
 }
@@ -276,13 +326,37 @@ func collectRets(retStmt *ast.ReturnStmt, code []byte, level string) []*Ret {
 				switch retCall.Fun.(type) {
 				case *ast.SelectorExpr:
 					retSelector := retCall.Fun.(*ast.SelectorExpr)
-					retX, ok := retSelector.X.(*ast.Ident)
-					if ok {
-						item.Sel.Obj = retX.Name
-					} else { // may be not Ident !
-						fmt.Printf("\nERR: UNKNOWN RETSELECTOR %s", reflect.TypeOf(retSelector.X))
+					item.Var.Fun = retSelector.Sel.Name
+					switch retSelector.X.(type) { // Analyse started from [selector.*]
+					case *ast.Ident:
+						retX := retSelector.X.(*ast.Ident)
+						item.Var.Obj = retX.Name
+						switch item.Var.Fun {
+						case "Jump":
+						case "Stop":
+						case "JumpExt":
+						default:
+							fmt.Printf("\n:collectRets: [WARN]: UNKNOWN RET SELECTOR '%s' in '%s.%s'",
+								item.Var.Fun, item.Var.Obj, item.Var.Fun)
+						}
+					case *ast.CallExpr:
+						subX := retSelector.X.(*ast.CallExpr)
+						subXStr := fmt.Sprintf("%s", code[subX.Pos()-1:subX.End()-1])
+						item.Var.Obj = subXStr
+						switch item.Var.Fun {
+						case "ThenRepeat":
+						case "ThenJump":
+						default:
+							fmt.Printf("\n:collectRets: [WARN]: UNKNOWN RET SUB SELECTOR '%s' in '%s'",
+								item.Var.Fun, item.Var.Obj, item.Var.Fun)
+						}
+					default:
+						fmt.Printf("\nERR: UNKNOWN RETSELECTOR %s | <<%s>>",
+							reflect.TypeOf(retSelector.X),
+							code[retSelector.X.Pos()-1:retSelector.X.End()-1],
+						)
 					}
-					item.Sel.Fun = retSelector.Sel.Name
+
 					// Args
 					accArgs := make([]Variant, 0)
 					for _, retarg := range retCall.Args {
@@ -290,7 +364,6 @@ func collectRets(retStmt *ast.ReturnStmt, code []byte, level string) []*Ret {
 						case *ast.SelectorExpr:
 							sel := retarg.(*ast.SelectorExpr)
 							selName := fmt.Sprintf("%s", code[sel.X.Pos()-1:sel.X.End()-1])
-							// arg := fmt.Sprintf("(. %s %s)", selName, sel.Sel.Name) // ::::::::::::::::::::::::::::::::::
 							arg := Variant{
 								Type: SelectorType,
 								Obj: selName,
@@ -305,11 +378,34 @@ func collectRets(retStmt *ast.ReturnStmt, code []byte, level string) []*Ret {
 								Str:  idn.Name,
 							}
 							accArgs = append(accArgs, arg)
+						case *ast.CompositeLit: /// THERE IS BUGS !!! [TODO]
+							cl := retarg.(*ast.CompositeLit)
+							// We know only JumpExt composite literal
+							arg := Variant{}
+							if "JumpExt" == item.Var.Fun {
+								ast.Inspect(cl, func(n ast.Node) bool {
+									exp, ok := n.(*ast.KeyValueExpr)
+									if ok {
+										if "Transition" == fmt.Sprintf("%s", exp.Key) {
+											sel := exp.Value.(*ast.SelectorExpr)
+											selName := fmt.Sprintf("%s", code[sel.X.Pos()-1:sel.X.End()-1])
+											arg = Variant{
+												Type: SelectorType,
+												Obj: selName,
+												Fun: sel.Sel.Name,
+											}
+										}
+									}
+									return true
+								})
+							} else {
+								fmt.Printf("\n:collectRets: [ERR]: INK JumpExt transition")
+							}
+							accArgs = append(accArgs, arg)
 						default:
-							fmt.Printf("\nERR: UNKNOWN RETARG('%s' of %s)", retarg, reflect.TypeOf(retarg))
+							fmt.Printf("\nERR: UNKNOWN RETARGtype [%s] :OF: %s", reflect.TypeOf(retarg), retarg)
 						}
 					}
-					//item.Args = append(item.Args, accArgs)
 					item.Args = accArgs
 				default:
 					fmt.Printf("\nERR: UNKNOWN RETSEL %s", fmt.Sprintf("%s", reflect.TypeOf(retCall.Fun)))
