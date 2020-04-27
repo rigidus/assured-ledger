@@ -6,16 +6,17 @@
 package small
 
 import (
-	"context"
-	"fmt"
 	"testing"
 	"time"
 
+	"github.com/ThreeDotsLabs/watermill/message"
 	"github.com/gojuno/minimock/v3"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/insolar/assured-ledger/ledger-core/v2/conveyor"
 	"github.com/insolar/assured-ledger/ledger-core/v2/conveyor/smachine"
+	"github.com/insolar/assured-ledger/ledger-core/v2/conveyor/sworker"
 	"github.com/insolar/assured-ledger/ledger-core/v2/insolar"
 	"github.com/insolar/assured-ledger/ledger-core/v2/insolar/gen"
 	"github.com/insolar/assured-ledger/ledger-core/v2/insolar/jet"
@@ -31,50 +32,60 @@ import (
 	"github.com/insolar/assured-ledger/ledger-core/v2/runner/executor"
 	"github.com/insolar/assured-ledger/ledger-core/v2/testutils"
 	"github.com/insolar/assured-ledger/ledger-core/v2/vanilla/longbits"
+	"github.com/insolar/assured-ledger/ledger-core/v2/vanilla/synckit"
 	"github.com/insolar/assured-ledger/ledger-core/v2/virtual/descriptor"
 	"github.com/insolar/assured-ledger/ledger-core/v2/virtual/execute"
 	"github.com/insolar/assured-ledger/ledger-core/v2/virtual/integration/utils"
+	"github.com/insolar/assured-ledger/ledger-core/v2/virtual/statemachine"
 )
 
-func Test_Constructor_Increment_Pending_Counters(t *testing.T) {
+func Test_SlotMachine_Increment_Pending_Counters(t *testing.T) {
+	const scanCountLimit = 1e4
+
 	mc := minimock.NewController(t)
 	defer mc.Finish()
 
 	ctx := inslogger.TestContext(t)
 
 	machineConfig := smachine.SlotMachineConfig{
-		PollingPeriod:   500 * time.Millisecond,
-		PollingTruncate: 1 * time.Millisecond,
-		SlotPageSize:    1000,
-		ScanCountLimit:  100000,
+		PollingPeriod:     500 * time.Millisecond,
+		PollingTruncate:   1 * time.Millisecond,
+		SlotPageSize:      1000,
+		ScanCountLimit:    100000,
+		SlotMachineLogger: statemachine.ConveyorLoggerFactory{},
 	}
 
 	pd := pulse2.NewFirstPulsarData(10, longbits.Bits256{})
-	pn := pd.PulseNumber
-	smExecute := execute.SMExecute{}
 
-	pulseConveyor := conveyor.NewPulseConveyor(ctx, conveyor.PulseConveyorConfig{
-		ConveyorMachineConfig: machineConfig,
-		SlotMachineConfig:     machineConfig,
-		EventlessSleep:        100 * time.Millisecond,
-		MinCachePulseAge:      100,
-		MaxPastPulseAge:       1000,
-	}, func(inputPn pulse2.Number, input conveyor.InputEvent) smachine.CreateFunc {
-		require.Equal(t, pn, inputPn)
-		return func(ctx smachine.ConstructionContext) smachine.StateMachine {
-			smExecute.Payload = input.(*payload.VCallRequest)
-			return &smExecute
-		}
-	}, nil)
+	caller := insolar.Reference{}
+	prototype := gen.Reference()
+	smExecute := execute.SMExecute{
+		Payload: &payload.VCallRequest{
+			Polymorph:           uint32(payload.TypeVCallRequest),
+			CallType:            payload.CTConstructor,
+			CallFlags:           0,
+			CallAsOf:            0,
+			Caller:              caller,
+			Callee:              gen.Reference(),
+			CallSiteDeclaration: prototype,
+			CallSiteMethod:      "test",
+			CallSequence:        0,
+			CallReason:          insolar.Reference{},
+			RootTX:              insolar.Reference{},
+			CallTX:              insolar.Reference{},
+			CallRequestFlags:    0,
+			KnownCalleeIncoming: insolar.Reference{},
+			EntryHeadHash:       nil,
+			CallOutgoing:        reference.Local{},
+			Arguments:           nil,
+		},
+		Meta: &payload.Meta{
+			Sender: caller,
+		},
+	}
 
 	executorMock := testutils.NewMachineLogicExecutorMock(mc)
-	executorMock.CallConstructorMock.Set(
-		func(ctx context.Context, callContext *insolar.LogicCallContext, code insolar.Reference,
-			name string, args insolar.Arguments) (objectState []byte, result insolar.Arguments, err error) {
-			sMachine := smExecute
-			fmt.Printf("%v", sMachine)
-			return nil, []byte("345"), nil
-		})
+	executorMock.CallConstructorMock.Return(nil, []byte("345"), nil)
 	runnerService := runner.NewService()
 	require.NoError(t, runnerService.Init())
 	manager := executor.NewManager()
@@ -89,49 +100,81 @@ func Test_Constructor_Increment_Pending_Counters(t *testing.T) {
 		nil,
 	)
 	runnerAdapter := adapter.CreateRunnerServiceAdapter(ctx, runnerService)
-	pulseConveyor.AddDependency(runnerAdapter)
+
+	signal := synckit.NewVersionedSignal()
+	slotMachine := smachine.NewSlotMachine(machineConfig,
+		signal.NextBroadcast,
+		signal.NextBroadcast,
+		nil)
+	slotMachine.AddDependency(runnerAdapter)
 
 	publisherMock := &utils.PublisherMock{}
+
+	publisherMock.Checker = func(topic string, messages ...*message.Message) error {
+		assert.Len(t, messages, 1)
+
+		var (
+			_      = messages[0].Metadata
+			metaPl = messages[0].Payload
+		)
+
+		metaPlType, err := payload.UnmarshalType(metaPl)
+		assert.NoError(t, err)
+		assert.Equal(t, payload.TypeMeta, metaPlType)
+
+		metaPayload, err := payload.Unmarshal(metaPl)
+		assert.NoError(t, err)
+		assert.IsType(t, &payload.Meta{}, metaPayload)
+
+		callResultPl := metaPayload.(*payload.Meta).Payload
+		callResultPlType, err := payload.UnmarshalType(callResultPl)
+		assert.NoError(t, err)
+		assert.Equal(t, payload.TypeVCallResult, callResultPlType)
+
+		callResultPayload, err := payload.Unmarshal(callResultPl)
+		assert.NoError(t, err)
+		assert.IsType(t, &payload.VCallResult{}, callResultPayload)
+		assert.Equal(t, callResultPayload.(*payload.VCallResult).ReturnArguments, []byte("345"))
+
+		return nil
+	}
+
 	jetCoordinatorMock := jet.NewCoordinatorMock(t).
 		MeMock.Return(gen.Reference()).
 		QueryRoleMock.Return([]insolar.Reference{gen.Reference()}, nil)
 	pulses := pulse.NewStorageMem()
 	messageSender := messagesender.NewDefaultService(publisherMock, jetCoordinatorMock, pulses)
 	messageSenderAdapter := messagesenderadapter.CreateMessageSendService(ctx, messageSender)
-	pulseConveyor.AddDependency(messageSenderAdapter)
+	slotMachine.AddDependency(messageSenderAdapter)
 
-	emerChan := make(chan struct{})
-	pulseConveyor.StartWorker(emerChan, func() {})
-	defer func() {
-		close(emerChan)
-	}()
+	pulseSlot := conveyor.NewPresentPulseSlot(nil, pd.AsRange())
+	slotMachine.AddDependency(&pulseSlot)
 
-	require.NoError(t, pulseConveyor.CommitPulseChange(pd.AsRange()))
+	slotMachine.AddNewByFunc(ctx, func(ctx smachine.ConstructionContext) smachine.StateMachine {
+		return &smExecute
+	}, smachine.CreateDefaultValues{})
 
-	prototype := gen.Reference()
-	pl := payload.VCallRequest{
-		Polymorph:           uint32(payload.TypeVCallRequest),
-		CallType:            payload.CTConstructor,
-		CallFlags:           0,
-		CallAsOf:            0,
-		Caller:              insolar.Reference{},
-		Callee:              gen.Reference(),
-		CallSiteDeclaration: prototype,
-		CallSiteMethod:      "test",
-		CallSequence:        0,
-		CallReason:          insolar.Reference{},
-		RootTX:              insolar.Reference{},
-		CallTX:              insolar.Reference{},
-		CallRequestFlags:    0,
-		KnownCalleeIncoming: insolar.Reference{},
-		EntryHeadHash:       nil,
-		CallOutgoing:        reference.Local{},
-		Arguments:           nil,
+	workerFactory := sworker.NewAttachableSimpleSlotWorker()
+	neverSignal := synckit.NewNeverSignal()
+
+	for {
+		var (
+			repeatNow    bool
+			nextPollTime time.Time
+		)
+		wakeupSignal := signal.Mark()
+		workerFactory.AttachTo(slotMachine, neverSignal, scanCountLimit, func(worker smachine.AttachedSlotWorker) {
+			repeatNow, nextPollTime = slotMachine.ScanOnce(0, worker)
+		})
+		switch {
+		case repeatNow:
+			continue
+		case !nextPollTime.IsZero():
+			time.Sleep(time.Until(nextPollTime))
+		case !slotMachine.IsActive():
+			return
+		default:
+			wakeupSignal.Wait()
+		}
 	}
-
-	testIsDone := make(chan struct{}, 0)
-
-	err = pulseConveyor.AddInput(ctx, pd.PulseNumber, &pl)
-	require.NoError(t, err)
-	<-testIsDone
 }
